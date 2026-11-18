@@ -1,0 +1,68 @@
+﻿services:
+  itsm-db:
+    image: mysql:8.0
+    container_name: itsm-db
+    restart: unless-stopped
+    env_file:
+      - ./config/db.env
+    command: --default-authentication-plugin=mysql_native_password --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - itsm_mysqldata:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+    networks:
+      - itsm-net
+
+  itsm-redis:
+    image: redis:7-alpine
+    container_name: itsm-redis
+    restart: unless-stopped
+    networks:
+      - itsm-net
+
+  itsm-api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    image: ghcr.io/${GITHUB_REPOSITORY:-local/itsm-api}:${IMAGE_TAG:-latest}
+    container_name: itsm-api
+    restart: unless-stopped
+    env_file:
+      - ./config/app.env
+      - ./config/db.env
+    volumes:
+      - ./api/uploads:/api/uploads
+    depends_on:
+      itsm-db:
+        condition: service_healthy
+      itsm-redis:
+        condition: service_started
+    networks:
+      - itsm-net
+
+  itsm-site:
+    build:
+      context: ./site
+      dockerfile: Dockerfile
+    image: ghcr.io/${GITHUB_REPOSITORY:-local/itsm-site}:${IMAGE_TAG:-latest}
+    container_name: itsm-site
+    restart: unless-stopped
+    ports:
+      - "${APP_EXTERNAL_PORT:-8000}:80"
+    volumes:
+      - ./site/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./site/html:/usr/share/nginx/html:ro
+    depends_on:
+      - itsm-api
+    networks:
+      - itsm-net
+
+volumes:
+  itsm_mysqldata:
+
+networks:
+  itsm-net:
+    driver: bridge

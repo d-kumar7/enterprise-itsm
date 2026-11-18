@@ -1,0 +1,76 @@
+﻿name: Enterprise ITSM CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, dev ]
+  pull_request:
+    branches: [ main, dev ]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  validate-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate FastAPI Python syntax & imports
+        working-directory: ./api
+        run: |
+          pip install -r requirements.txt
+          python -m py_compile main.py database.py core/*.py models/*.py services/*.py routers/*.py
+      - name: Test Docker Compose build
+        run: |
+          mkdir -p config
+          touch config/db.env config/app.env
+          docker compose build
+
+  build-and-deploy-prod:
+    needs: validate-and-test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build & Push API Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./api
+          push: true
+          tags: ghcr.io/${{ github.repository }}/itsm-api:latest
+      - name: Build & Push Site Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./site
+          push: true
+          tags: ghcr.io/${{ github.repository }}/itsm-site:latest
+      - name: Rolling Upgrade on Production Host via SSH
+        if: ${{ secrets.PROD_HOST != '' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.PROD_HOST }}
+          username: ${{ secrets.PROD_USER }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          script: |
+            set -e
+            sudo mkdir -p /app/prod/wms
+            sudo chown -R $USER:$USER /app/prod/wms
+            if [ ! -d /app/prod/wms/.git ]; then
+              git clone https://github.com/${{ github.repository }}.git /app/prod/wms
+            else
+              cd /app/prod/wms
+              git fetch origin main
+              git reset --hard origin/main
+            fi
+            cd /app/prod/wms
+            chmod +x scripts/bootstrap.sh
+            ./scripts/bootstrap.sh

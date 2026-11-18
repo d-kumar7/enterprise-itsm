@@ -1,0 +1,6 @@
+﻿config/*.env
+api/uploads/*
+!api/uploads/**/.gitkeep
+__pycache__/
+*.pyc
+.env
